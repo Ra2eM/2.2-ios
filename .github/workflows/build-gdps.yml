@@ -1,0 +1,75 @@
+name: Build Mushroom GDPS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Base IPA
+        run: |
+          wget -O base.ipa "YOUR_DIRECT_IPA_URL_HERE"
+          file base.ipa
+
+      - name: Extract IPA
+        run: unzip -q base.ipa
+
+      - name: Patch Server URLs and Bundle ID
+        env:
+          GDPS_URL: "http://ra2e.ps.fhgdps.com/db"
+          BUNDLE_ID: "com.raem.mushroomingdyd"
+          APP_NAME: "Mushroom GDPS"
+        run: |
+          python3 - << 'EOF'
+          import os, base64
+          import plistlib
+
+          binary_path = "Payload/GeometryJump.app/GeometryJump"
+          new_url = os.environ["GDPS_URL"].rstrip("/")
+
+          old_plain = b"http://www.boomlings.com/database"
+          old_b64 = b"aHR0cDovL3d3dy5ib29tbGluZ3MuY29tL2RhdGFiYXNl"
+
+          new_plain = new_url.encode("utf-8")
+          new_b64 = base64.b64encode(new_plain)
+
+          if len(new_plain) > len(old_plain):
+              raise ValueError(f"URL too long ({len(new_plain)} chars). Max allowed is {len(old_plain)}.")
+
+          padded_plain = new_plain.ljust(len(old_plain), b"\x00")
+          padded_b64 = new_b64.ljust(len(old_b64), b"\x00")
+
+          with open(binary_path, "rb") as f:
+              data = f.read()
+
+          assert old_plain in data, "Plaintext URL not found (is base.ipa decrypted?)"
+          assert old_b64 in data, "Base64 URL not found in binary"
+
+          data = data.replace(old_plain, padded_plain).replace(old_b64, padded_b64)
+
+          with open(binary_path, "wb") as f:
+              f.write(data)
+
+          # Update Info.plist (Bundle ID and Display Name)
+          plist_path = "Payload/GeometryJump.app/Info.plist"
+          with open(plist_path, "rb") as fp:
+              plist = plistlib.load(fp)
+
+          plist["CFBundleIdentifier"] = os.environ["BUNDLE_ID"]
+          plist["CFBundleDisplayName"] = os.environ["APP_NAME"]
+
+          with open(plist_path, "wb") as fp:
+              plistlib.dump(plist, fp)
+
+          print("Successfully patched binary and Info.plist!")
+          EOF
+
+      - name: Repackage IPA
+        run: zip -qr Mushroom-GDPS.ipa Payload
+
+      - name: Upload GDPS IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mushroom-GDPS-iOS
+          path: Mushroom-GDPS.ipa
